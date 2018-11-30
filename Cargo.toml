@@ -1,0 +1,11 @@
+[package]
+name = "toamend"
+version = "0.1.0"
+authors = ["Björn Molin <bjorn.molin@motrice.se>"]
+
+[dependencies]
+env_logger = "0.6.0"
+log = "0.4"
+pretty_env_logger = "0.2"
+uuid = { version = "0.7.1", features = ["serde", "v4"] }    
+ws = "0.7.9"
