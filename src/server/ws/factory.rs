@@ -4,8 +4,8 @@ extern crate ws;
 use ws::{Sender as WsSender, Factory};
 use std::sync::mpsc::{Sender};
 
-use toamend_ws::handler::WsHandler;
-use toamend_ws::action::WsClientAction;
+use server::ws::handler::WsHandler;
+use server::ws::action::WsClientAction;
 use self::uuid::Uuid;
 
 pub struct WsFactory {

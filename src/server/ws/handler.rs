@@ -4,7 +4,7 @@ extern crate ws;
 use ws::{Sender as WsSender, Handler, Result, Message, Handshake, CloseCode, Error};
 use std::sync::mpsc::{Sender};
 
-use toamend_ws::action::WsClientAction;
+use server::ws::action::WsClientAction;
 
 pub struct WsHandler {
     pub out: WsSender,
@@ -110,7 +110,7 @@ impl Handler for WsHandler {
     fn on_close(&mut self, code: CloseCode, reason: &str) {
       match &self.config_event {
         Some(sender) => {
-          match sender.send(WsClientAction::Close{conn_id: self.conn_id.clone(), ws_topics: String::from("topics")}) {
+          match sender.send(WsClientAction::Close{conn_id: self.conn_id.clone()}) {
               Ok(_) => trace!("WsClientAction send close ok"),
               Err(err) => {
                 error!("WsClientAction send close Error {}", err)
