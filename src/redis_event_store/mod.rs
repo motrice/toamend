@@ -62,7 +62,7 @@ impl RedisContext {
     
     pub fn append_event(&self, evt: &LedgerEvent<Value>) -> RedisIntResult {
         let pool = self.pool.clone();
-        let con = pool.get().unwrap();
+        let mut con = pool.get().unwrap();
         
         match serde_json::to_string(evt) {
             Ok(json_str) => { 
@@ -84,7 +84,7 @@ impl RedisContext {
 
     pub fn get_latest(&self, event_id: &str) ->  RedisStringResult {
             let pool = self.pool.clone();
-            let con = pool.get().unwrap();
+            let mut con = pool.get().unwrap();  
 
             // get last element in list
             match con.lindex(event_id, -1) {

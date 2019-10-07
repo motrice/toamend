@@ -1,8 +1,10 @@
 extern crate lmdb_rs;
 extern crate serde_json;
+extern crate ws;
 
 use self::lmdb_rs::{Database, DbHandle, Environment, EnvBuilder, DbFlags};
 use self::lmdb_rs::core::MdbError;
+use std::result::Result;
 use domain::{LedgerEvent};
 use kafka::LedgerEvents;
 use serde_json::Value;

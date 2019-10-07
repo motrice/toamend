@@ -50,7 +50,7 @@ const KAFKA_BROKERS : &str = "localhost:9092";
 
 const KAFKA_CMD_CONFIG : KafkaConfig = KafkaConfig {
     brokers: KAFKA_BROKERS,
-    workers: &[&WorkerConfig{name: "cmd-worker", topics: &["test-cmd-3part"], publish_events_topic: &Some("test-evt")}]
+    workers: &[&WorkerConfig{name: "cmd-worker", topics: &["test-cmd"], publish_events_topic: &Some("test-evt")}]
 };
 
 const KAFKA_EVT_CONFIG : KafkaConfig = KafkaConfig {
@@ -269,8 +269,8 @@ pub fn start_process_commands(producer: &FutureProducer, consumer: &LoggingConsu
 
                                 match lmdb_ctx.get(&gen_content_id) {
                                     Ok(latest_version) => {
-                                        info!("Tried to create a new value with an already existing id");
-                                        Err(Error::new(ErrorKind::Other, "Tried to create a new value with an already existing id"))
+                                        info!("Tried to create a new value with an already existing id or version {}", latest_version);
+                                        Err(Error::new(ErrorKind::Other, "Tried to create a new value with an already existing id or version"))
                                     },
                                     Err(err) => match err {
                                         MdbError::NotFound => {
@@ -289,6 +289,8 @@ pub fn start_process_commands(producer: &FutureProducer, consumer: &LoggingConsu
                                                     first_published_at: Some(now_utc_str),
                                                     published_at: None,
                                                     published_by: None,
+                                                    sealed_at: None,
+                                                    sealed_by: None,
                                                     previous_version: None,
                                                     published_version: None,
                                                     published_count: 0,
@@ -306,38 +308,44 @@ pub fn start_process_commands(producer: &FutureProducer, consumer: &LoggingConsu
 
                                     }
                                 }
-
-                                
                             },
                             Action::UPDATE(revision) => {
                                 info!("UPDATE id={} version={}", revision.id, revision.version);
                                 match lmdb_ctx.get_latest(&revision.id) {
                                     Ok(l) => match l {
-                                        Some(latestValue) => {
-                                            if latestValue.sys.version != revision.version {
-                                                println!("Optimistic lock error")
+                                        Some(latest_value) => {
+                                            if latest_value.sys.version != revision.version {
+                                                println!("Optimistic lock error");
+                                                Err(Error::new(ErrorKind::Other, "Optimistic lock error, retry change on latest data"))
                                             }
-                                            if latestValue.sys.id != revision.id {
-                                                println!("Id mismatch")
-                                            }
+                                            else if latest_value.sys.id != revision.id {
+                                                println!("Id mismatch");
+                                                Err(Error::new(ErrorKind::Other,"internal id mismatch"))
 
-                                            let evt = LedgerEvent {
-                                                sys: Sys {
-                                                    id: &revision.id,
-                                                    version: &new_version_id,
-                                                    updated_by: &user_str,
-                                                    updated_at: Some(now_utc_str),
-                                                    previous_version: Some(&revision.version),
-                                                    payload_checksum: Some(&digest),
-                                                    ..latestValue.sys
-                                                },
-                                                event_id: new_event_id,
-                                                action: Action::UPDATE(revision),
-                                                payload: cmd.payload,
-                                                
-                                            };
-                                            send_event(&producer, publish_events_topic, &evt);
-                                            Result::Ok(&new_version_id)
+                                            }
+                                            else if latest_value.sys.sealed_at != None {
+                                                println!("Document with id={} is sealed at {} by {}", latest_value.sys.id, latest_value.sys.sealed_at.unwrap(), latest_value.sys.sealed_by.unwrap());
+                                                Err(Error::new(ErrorKind::Other, "Document is sealed. Copy data to new document."))
+                                            }
+                                            else {
+                                                let evt = LedgerEvent {
+                                                    sys: Sys {
+                                                        id: &revision.id,
+                                                        version: &new_version_id,
+                                                        updated_by: &user_str,
+                                                        updated_at: Some(now_utc_str),
+                                                        previous_version: Some(&revision.version),
+                                                        payload_checksum: Some(&digest),
+                                                        ..latest_value.sys
+                                                    },
+                                                    event_id: new_event_id,
+                                                    action: Action::UPDATE(revision),
+                                                    payload: cmd.payload,
+                                                    
+                                                };
+                                                send_event(&producer, publish_events_topic, &evt);
+                                                Result::Ok(&new_version_id)
+                                            }
                                         },
                                         None => {
                                             println!("Error cannot update unexisting value");
@@ -386,18 +394,122 @@ pub fn start_process_commands(producer: &FutureProducer, consumer: &LoggingConsu
                                         }
                                     },
                                     Err(err) => {
-                                        println!("Error could not look up previous version");
+                                        println!("Error could not look up previous version err={}", err);
                                          Err(Error::new(ErrorKind::Other, "Error could not look up previous version"))
                                     }
                                 }
                             },
                             Action::COPY(revision) => {
-                                println!("COPY id={} version={}", revision.id, revision.version);
-                                Err(Error::new(ErrorKind::Other, "foo"))
+                                info!("COPY id={} version={}", revision.id, revision.version);
+
+                                match lmdb_ctx.get_latest(&gen_content_id) {
+                                     Ok(l) => match l {
+                                        Some(latest_value) => {
+                                            if latest_value.sys.version != revision.version {
+                                                println!("Optimistic lock error");
+                                                Err(Error::new(ErrorKind::Other, "Optimistic lock error, retry change on latest data"))
+                                            }
+                                            else if latest_value.sys.id != revision.id {
+                                                println!("Id mismatch");
+                                                Err(Error::new(ErrorKind::Other,"internal id mismatch"))
+
+                                            }
+                                            else if latest_value.sys.sealed_at != None {
+                                                println!("Document with id={} is sealed at {} by {}", latest_value.sys.id, latest_value.sys.sealed_at.unwrap(), latest_value.sys.sealed_by.unwrap());
+                                                Err(Error::new(ErrorKind::Other, "Document is sealed. Copy data to new document."))
+                                            }
+                                            
+                                            else if latest_value.sys.payload_checksum != Some(&digest) {
+                                                println!("Invalid copy (unallowed update) command of id={}", latest_value.sys.id);
+                                                Err(Error::new(ErrorKind::Other, "Invalid copy (unallowed update) command"))
+                                            }
+                                            else { 
+                                                let evt = LedgerEvent {
+                                                    sys: Sys {
+                                                        id: &gen_content_id,
+                                                        version: &new_version_id,
+                                                        updated_by: &user_str,
+                                                        updated_at: Some(now_utc_str),
+                                                        first_published_at: None,
+                                                        published_at: None,
+                                                        published_by: None,
+                                                        sealed_at: None,
+                                                        sealed_by: None,
+                                                        previous_version: Some(latest_value.sys.version),
+                                                        published_version: None,
+                                                        published_count: 0,
+                                                        payload_checksum: Some(&digest),
+                                                        ..latest_value.sys
+                                                    },
+                                                    event_id: new_event_id,
+                                                    action: Action::COPY(revision),
+                                                    payload: cmd.payload,
+                                                };    
+                                                send_event(&producer, publish_events_topic, &evt);
+                                                Result::Ok(&gen_content_id)
+                                                }
+                                        },
+                                        None => {
+                                            info!("Error cannot update unexisting value id={} version={}", revision.id, revision.version);
+                                            Err(Error::new(ErrorKind::Other,"Error cannot update unexisting value"))
+                                        }
+                                    },
+                                    Err(err) => {
+                                         info!("Tried to copy an non existing document id={} version={}", revision.id, revision.version);
+                                         Err(Error::new(ErrorKind::Other, "Tried to copy an non existing document"))
+                                    }
+                                }
                             },
                             Action::SEAL(revision) => {
-                                println!("SEAL id={} version={}", revision.id, revision.version);
-                                Err(Error::new(ErrorKind::Other, "foo"))
+                                info!("SEAL id={} version={}", revision.id, revision.version);
+                                match lmdb_ctx.get_latest(&revision.id) {
+                                    Ok(l) => match l {
+                                        Some(latest_value) => {
+                                            if latest_value.sys.version != revision.version {
+                                                info!("Optimistic lock error");
+                                                Err(Error::new(ErrorKind::Other, "Optimistic lock error, retry change on latest data"))
+                                            }
+                                            else if latest_value.sys.id != revision.id {
+                                                info!("Id mismatch");
+                                                Err(Error::new(ErrorKind::Other,"internal id mismatch"))
+
+                                            }
+                                            else if latest_value.sys.sealed_at != None {
+                                                info!("Document with id={} is sealed at {} by {}", latest_value.sys.id, latest_value.sys.sealed_at.unwrap(), latest_value.sys.sealed_by.unwrap());
+                                                Err(Error::new(ErrorKind::Other, "Document is sealed. Copy data to new document."))
+                                            }
+                                            else {
+                                                let evt = LedgerEvent {
+                                                    sys: Sys {
+                                                        id: &revision.id,
+                                                        version: &new_version_id,
+                                                        updated_by: &user_str,
+                                                        updated_at: Some(now_utc_str),
+                                                        sealed_by: Some(&user_str),
+                                                        sealed_at: Some(now_utc_str),
+                                                        previous_version: Some(&revision.version),
+                                                        payload_checksum: Some(&digest),
+                                                        ..latest_value.sys
+                                                    },
+                                                    event_id: new_event_id,
+                                                    action: Action::SEAL(revision),
+                                                    payload: cmd.payload,
+                                                    
+                                                };
+                                                send_event(&producer, publish_events_topic, &evt);
+                                                Result::Ok(&new_version_id)
+                                            }
+                                        },
+                                        None => {
+                                            println!("Error cannot update unexisting value");
+                                            Err(Error::new(ErrorKind::Other,"Error cannot update unexisting value"))
+                                        }
+                                    },
+                                    Err(err) => {
+                                        println!("Error could not look up previous version err={}", err);
+                                         Err(Error::new(ErrorKind::Other, "Error could not look up previous version"))
+                                    }
+                                }
                             }
                         }
                     },

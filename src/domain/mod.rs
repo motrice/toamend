@@ -36,6 +36,8 @@ pub struct Sys<'a> {
     pub first_published_at: Option<&'a str>,
     pub published_at: Option<&'a str>,
     pub published_by: Option<&'a str>,
+    pub sealed_at: Option<&'a str>,
+    pub sealed_by: Option<&'a str>,
     pub created_at: Option<&'a str>,
     pub created_by: &'a str,
     pub updated_at: Option<&'a str>,

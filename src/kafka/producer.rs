@@ -43,7 +43,7 @@ pub fn produce_command(command: LedgerCommand<Value>, user_id: &str) {//tracking
                     None, 
                     1000); */
             producer.send(
-                FutureRecord::to("test-cmd-3part")
+                FutureRecord::to("test-cmd")
                     .payload(&val) 
                     .key(cmd.tracking_id),
                 5000
